@@ -12,11 +12,17 @@ Every time a new post is observed a notification will be sent out
 
 import os
 import re
+import logging
 
 from piazza_api import Piazza
-from slacker import Slacker
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+from slack_bolt import App
+from slack_sdk.web import WebClient
 from time import sleep
 from dotenv import load_dotenv, find_dotenv
+
+from piazza_post import PiazzaPost
 
 
 # Config object to collect all required environment and config vars
@@ -28,7 +34,10 @@ class Config():
     PIAZZA_PASSWORD = ""    # User account password
     SLACK_TOKEN = ""        # Slack API token
     SLACK_CHANNEL = ""      # Slack channel name
-    SLACK_BOT_NAME = ""     # Slack bot name    
+    SLACK_BOT_NAME = ""     # Slack bot name
+
+   
+    
 
     def __init__(self, pid, pemail, ppass, stoken, schannel, sbot):
         self.PIAZZA_ID = pid
@@ -51,15 +60,15 @@ def main():
     network = piazza.network(conf.PIAZZA_ID)
 
     # Setup Slack
-    bot = Slacker(conf.SLACK_TOKEN)
+    client = WebClient(token=conf.SLACK_TOKEN)
+    #bot = Slacker(conf.SLACK_TOKEN)
 
     # Get the last posted_id
-    last_id = get_max_id(network.get_feed()['feed'])
-    post_base_url = "https://piazza.com/class/{}?cid=".format(conf.PIAZZA_ID)
+    #last_id = get_max_id(network.get_feed()['feed'])
+    last_id = 423
     
     # Run loop
-    check_for_new_posts(network, bot, conf.SLACK_BOT_NAME, 
-                        conf.SLACK_CHANNEL, last_id, post_base_url)
+    check_for_new_posts(network, client, conf, last_id)
 
 
 # Collect env vars
@@ -90,26 +99,19 @@ def config_env():
                   SLACK_TOKEN, SLACK_CHANNEL, SLACK_BOT_NAME)
 
 
-# This method exploits the fact that pinned posts have the field
-# 'pin: 1' and non-pinned ones don't. So we can return the first
-# non-pinned post id
 def get_max_id(feed):
-    for post in feed:
-        if "pin" not in post:
-            return post["nr"]
-    return -1
-
+    return feed[0]["nr"]
 
 # Method that polls Piazza in constant interval and posts new posts
 # to Slack
-def check_for_new_posts(network, bot, bot_name, channel, last_id,
-                        post_base_url, interval=60, include_link=True):
+def check_for_new_posts(network, client, config, last_id, interval=60):
     LAST_ID = last_id
 
     # Keep looping
     while True:
         try:
             UPDATED_LAST_ID = get_max_id(network.get_feed()['feed'])
+            print(f"UPDATED_LAST_ID: {UPDATED_LAST_ID}")
 
             # For all the new posts
             while UPDATED_LAST_ID > LAST_ID:
@@ -117,40 +119,37 @@ def check_for_new_posts(network, bot, bot_name, channel, last_id,
                 LAST_ID += 1
 
                 # Fetch post
+                print(f"fetching post ID: {LAST_ID}")
                 post = network.get_post(LAST_ID)
-                if not post.get('history', None):
+                
+                if not post.get('type', '') == 'question':
                     continue
+                
                 subject = post['history'][0]['subject']
-                content = re.findall(r'<p>(.*?)</p>', post['history'][0]['content'])[0]
 
-                # Create message and attach relevant parts
-                attachment = None
-                message = None
-                if include_link is True:
-                    attachment = [
-                        {
-                            "fallback": "New post on Piazza!",
-                            "title": subject,
-                            "title_link": post_base_url + str(UPDATED_LAST_ID),
-                            "text": content,
-                            "color": "good"
-                        }
-                    ]
-                else:
-                    message = "New post on Piazza!"
-
-                # Post message
-                bot.chat.post_message(channel,
-                                      message,
-                                      as_user=bot_name,
-                                      parse='full',
-                                      attachments=attachment)
+                # Create post message
+                start_post(subject, LAST_ID, client, config)
+                    
             print("Slack bot is up!")
             sleep(interval)
-        except:
-            print("Error when attempting to get Piazza feed, going to sleep...")
+        except Exception as e:
+            print(f"Error when attempting to get Piazza and post: {e}")
             sleep(interval)
 
+
+def start_post(subject, post_id, client, config):
+    # Create a new piazza post
+    piazza_post = PiazzaPost(subject, post_id, config)
+    
+    # Get the message payload
+    message = piazza_post.get_message_payload()
+    
+    # Post the onboarding message in Slack
+    response = client.chat_postMessage(**message)
+
+    return piazza_post
+    
+            
 # Main
 if __name__ == '__main__':
     main()
