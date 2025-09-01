@@ -65,7 +65,7 @@ def main():
 
     # Get the last posted_id
     #last_id = get_max_id(network.get_feed()['feed'])
-    last_id = 423
+    last_id = 424
     
     # Run loop
     check_for_new_posts(network, client, conf, last_id)
@@ -100,7 +100,14 @@ def config_env():
 
 
 def get_max_id(feed):
-    return feed[0]["nr"]
+    max_id = -1
+    for post in feed:
+        if ("note" not in post["type"] and
+            "Pinned" not in post["bucket_name"] and
+            "must-reads" not in post["bucket_name"]):
+            max_id = max(max_id, post["nr"])
+    return max_id
+
 
 # Method that polls Piazza in constant interval and posts new posts
 # to Slack
